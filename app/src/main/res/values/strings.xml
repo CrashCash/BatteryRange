@@ -1,0 +1,4 @@
+<resources>
+    <string name = "app_name">BatteryRange</string>
+    <string name = "title_activity_battery_range">Battery Range</string>
+</resources>
