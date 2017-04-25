@@ -12,3 +12,4 @@ The google_maps_api.xml files should look like:
 <string name="google_maps_key" translatable="false" templateMergeStrategy="preserve">ADD_API_KEY_HERE</string>
 </resources>
 ```
+You also need to enable the "Google Maps Geocoding API" for the home/destination markers to work.
