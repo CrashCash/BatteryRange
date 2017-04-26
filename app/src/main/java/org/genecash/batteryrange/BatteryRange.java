@@ -6,9 +6,12 @@ import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothSocket;
 import android.content.DialogInterface;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.location.Address;
+import android.location.Geocoder;
 import android.location.Location;
 import android.location.LocationManager;
 import android.os.AsyncTask;
@@ -23,6 +26,9 @@ import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.View;
+import android.widget.EditText;
+import android.widget.RadioGroup;
 import android.widget.Toast;
 
 import com.google.android.gms.common.ConnectionResult;
@@ -39,6 +45,8 @@ import com.google.android.gms.maps.model.Circle;
 import com.google.android.gms.maps.model.CircleOptions;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.LatLngBounds;
+import com.google.android.gms.maps.model.Marker;
+import com.google.android.gms.maps.model.MarkerOptions;
 import com.google.maps.android.SphericalUtil;
 
 import java.io.BufferedReader;
@@ -56,7 +64,8 @@ import java.util.logging.Logger;
 
 @SuppressWarnings("MissingPermission")
 public class BatteryRange extends AppCompatActivity
-        implements OnMapReadyCallback, GoogleApiClient.ConnectionCallbacks, GoogleApiClient.OnConnectionFailedListener, LocationListener {
+        implements OnMapReadyCallback, GoogleApiClient.ConnectionCallbacks, GoogleApiClient.OnConnectionFailedListener, LocationListener,
+                   GoogleMap.OnMapLongClickListener {
 
     // housekeeping
     static final int PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION = 1;
@@ -67,12 +76,18 @@ public class BatteryRange extends AppCompatActivity
     static final int MENU_ZOOM = 1;
     static final int MENU_CENTER = 2;
     static final int MENU_DEVICE = 3;
+    static final int MENU_ADD_HOME = 4;
+    static final int MENU_ADD_DEST = 5;
 
     // user preferences
     SharedPreferences prefs;
     static final String PREFS_ZOOM = "zoom";
     static final String PREFS_CENTER = "center";
     static final String PREFS_DEVICE = "device";
+    static final String PREFS_HOME_LAT = "home-lat";
+    static final String PREFS_HOME_LNG = "home-lng";
+    static final String PREFS_DEST_LAT = "dest-lat";
+    static final String PREFS_DEST_LNG = "dest-lng";
     // zoom to fit range circle
     boolean flagZoom;
     // center on location
@@ -88,6 +103,11 @@ public class BatteryRange extends AppCompatActivity
     Location currLocation = null;
     // range is in meters
     double range = -1;
+    Marker markHome = null;
+    Marker markDest = null;
+    static final int MARK_UNKNOWN = 0;
+    static final int MARK_HOME = 1;
+    static final int MARK_DEST = 2;
 
     // Bluetooth
     Handler handler;
@@ -99,7 +119,6 @@ public class BatteryRange extends AppCompatActivity
     BufferedReader btBuffRdr;
     BtRange rangeTask;
     boolean running;
-    boolean connected = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -127,6 +146,17 @@ public class BatteryRange extends AppCompatActivity
         } else {
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
                                               PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION);
+        }
+
+        // get intent, action and MIME type
+        Intent intent = getIntent();
+        String action = intent.getAction();
+        String type = intent.getType();
+
+        // handle location sent from Google Maps
+        if (Intent.ACTION_SEND.equals(action) && type != null && "text/plain".equals(type)) {
+            String address = intent.getStringExtra(Intent.EXTRA_TEXT).split("\n")[1];
+            setMarker(address, null);
         }
 
         // check to see if the GPS is enabled
@@ -165,6 +195,22 @@ public class BatteryRange extends AppCompatActivity
     public void onMapReady(GoogleMap googleMap) {
         log("onMapReady");
         map = googleMap;
+
+        // load markers from preferences
+        double lat = prefs.getFloat(PREFS_HOME_LAT, 999);
+        double lng = prefs.getFloat(PREFS_HOME_LNG, 999);
+        if (lat != 999 && lng != 999) {
+            markHome = map.addMarker(new MarkerOptions().title("Home").position(new LatLng(lat, lng)));
+        }
+
+        lat = prefs.getFloat(PREFS_DEST_LAT, 999);
+        lng = prefs.getFloat(PREFS_DEST_LNG, 999);
+        if (lat != 999 && lng != 999) {
+            markDest = map.addMarker(new MarkerOptions().title("Destination").position(new LatLng(lat, lng)));
+        }
+
+        map.setOnMapLongClickListener(this);
+
         updateLocationUI();
         btConnect();
     }
@@ -213,13 +259,23 @@ public class BatteryRange extends AppCompatActivity
         resize(position);
     }
 
+    // handle map long-press to place marker
+    @Override
+    public void onMapLongClick(LatLng latLng) {
+        setMarker(null, latLng);
+    }
+
     // save battery when we're not focused
     @Override
     protected void onPause() {
         log("onPause");
 
-        // disconnect from Bluetooth
+        // disconnect from Bluetooth and stop connection retries
         running = false;
+        if (rangeTask != null) {
+            rangeTask.cancel(false);
+        }
+        handler = null;
 
         // turn off location updates
         if (googleApiClient != null && googleApiClient.isConnected()) {
@@ -243,13 +299,6 @@ public class BatteryRange extends AppCompatActivity
     @Override
     protected void onDestroy() {
         log("onDestroy");
-
-        // disconnect from Bluetooth and stop connection retries
-        running = false;
-        if (rangeTask != null) {
-            rangeTask.cancel(false);
-        }
-        handler = null;
 
         // close logging file handlers to get rid of "lck" turdlets
         for (java.util.logging.Handler h : loggerSet.getHandlers()) {
@@ -277,7 +326,7 @@ public class BatteryRange extends AppCompatActivity
     @Override
     public boolean onPrepareOptionsMenu(Menu menu) {
         menu.clear();
-        if (connected) {
+        if (btSocket != null && btSocket.isConnected()) {
             if (flagZoom) {
                 menu.add(Menu.NONE, MENU_ZOOM, Menu.NONE, "Do Not Zoom To Fit Range");
             } else {
@@ -288,6 +337,10 @@ public class BatteryRange extends AppCompatActivity
             } else {
                 menu.add(Menu.NONE, MENU_CENTER, Menu.NONE, "Center Map On Location");
             }
+        }
+        if (currLocation != null) {
+            menu.add(Menu.NONE, MENU_ADD_HOME, Menu.NONE, "Set Home Marker");
+            menu.add(Menu.NONE, MENU_ADD_DEST, Menu.NONE, "Set Destination Marker");
         }
         menu.add(Menu.NONE, MENU_DEVICE, Menu.NONE, "Select Bluetooth Device");
         super.onPrepareOptionsMenu(menu);
@@ -315,6 +368,12 @@ public class BatteryRange extends AppCompatActivity
                 return true;
             case MENU_DEVICE:
                 selectDevice();
+                return true;
+            case MENU_ADD_HOME:
+                setMarker(MARK_HOME, currLocation.getLatitude(), currLocation.getLongitude());
+                return true;
+            case MENU_ADD_DEST:
+                setMarker(MARK_DEST, currLocation.getLatitude(), currLocation.getLongitude());
                 return true;
         }
         return super.onOptionsItemSelected(item);
@@ -439,7 +498,7 @@ public class BatteryRange extends AppCompatActivity
 
                 // disconnect from current device
                 running = false;
-                while (connected) {
+                while (btSocket != null && btSocket.isConnected()) {
                     try {
                         Thread.sleep(250);
                     } catch (InterruptedException e) {
@@ -453,6 +512,116 @@ public class BatteryRange extends AppCompatActivity
 
         builder.create();
         builder.show();
+    }
+
+    // dialog to set a marker
+    void setMarker(String address, final LatLng latLng) {
+        final AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Set Marker");
+
+        // set up layout
+        View views;
+        if (address == null) {
+            views = this.getLayoutInflater().inflate(R.layout.dialog_marker_short, null);
+        } else {
+            views = this.getLayoutInflater().inflate(R.layout.dialog_marker_full, null);
+        }
+        builder.setView(views);
+        final EditText addressText = (EditText) views.findViewById(R.id.address);
+        if (address != null) {
+            addressText.setText(address);
+        }
+        final RadioGroup radioGroup = (RadioGroup) views.findViewById(R.id.radiobuttons);
+
+        builder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int id) {
+                double lat;
+                double lng;
+
+                // figure out if we're setting the home or destination marker
+                int flag = MARK_UNKNOWN;
+                if (radioGroup != null) {
+                    switch (radioGroup.getCheckedRadioButtonId()) {
+                        case R.id.home:
+                            flag = MARK_HOME;
+                            break;
+                        case R.id.dest:
+                            flag = MARK_DEST;
+                            break;
+                    }
+                }
+                if (flag == MARK_UNKNOWN) {
+                    Toast.makeText(getApplicationContext(), "You must pick a marker", Toast.LENGTH_LONG).show();
+                    return;
+                }
+
+                // determine the position
+                if (latLng != null) {
+                    lat = latLng.latitude;
+                    lng = latLng.longitude;
+                } else {
+                    String addressFinal = addressText.getText().toString().trim();
+                    if (addressFinal.length() == 0) {
+                        Toast.makeText(getApplicationContext(), "You must enter an address", Toast.LENGTH_LONG).show();
+                        return;
+                    } else {
+                        // convert street address to lat/long
+                        Geocoder coder = new Geocoder(getApplicationContext());
+                        try {
+                            List<Address> addresses = coder.getFromLocationName(addressFinal, 1);
+                            if (addressFinal.length() == 0) {
+                                Toast.makeText(getApplicationContext(), "Address not found", Toast.LENGTH_LONG).show();
+                                return;
+                            } else {
+                                lat = addresses.get(0).getLatitude();
+                                lng = addresses.get(0).getLongitude();
+                            }
+                        } catch (IOException e) {
+                            logExcept(e);
+                            Toast.makeText(getApplicationContext(), "Exception: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                    }
+                }
+
+                // finally actually set a marker
+                setMarker(flag, lat, lng);
+            }
+        });
+
+        builder.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int id) {
+                dialog.cancel();
+            }
+        });
+
+        builder.create();
+        builder.show();
+    }
+
+    // set a marker with known type and location
+    void setMarker(int flag, double lat, double lng) {
+        SharedPreferences.Editor editor = prefs.edit();
+        switch (flag) {
+            case MARK_HOME:
+                if (markHome != null) {
+                    markHome.remove();
+                }
+                markHome = map.addMarker(new MarkerOptions().title("Home").position(new LatLng(lat, lng)));
+                // .icon(BitmapDescriptorFactory.fromResource(R.drawable.arrow)));
+                editor.putFloat(PREFS_HOME_LAT, (float) lat);
+                editor.putFloat(PREFS_HOME_LNG, (float) lng);
+                break;
+            case MARK_DEST:
+                if (markDest != null) {
+                    markDest.remove();
+                }
+                markDest = map.addMarker(new MarkerOptions().title("Destination").position(new LatLng(lat, lng)));
+                editor.putFloat(PREFS_DEST_LAT, (float) lat);
+                editor.putFloat(PREFS_DEST_LNG, (float) lng);
+                break;
+        }
+        editor.apply();
     }
 
     // connect to our device and initialize it
@@ -509,7 +678,6 @@ public class BatteryRange extends AppCompatActivity
             String hex;
             double oldRange = range;
             running = true;
-            connected = false;
 
             // punt if we've exited the app
             if (handler == null) {
@@ -519,6 +687,7 @@ public class BatteryRange extends AppCompatActivity
             try {
                 // connect to dongle as a serial port I/O device
                 log("connect to dongle");
+                publishProgress("Connecting to device");
                 btSocket = btDevice.createRfcommSocketToServiceRecord(UUID.fromString("00001101-0000-1000-8000-00805F9B34FB"));
                 try {
                     btSocket.connect();
@@ -531,7 +700,6 @@ public class BatteryRange extends AppCompatActivity
                 }
                 log("connected");
                 publishProgress("Device connected");
-                connected = true;
                 btInputStream = btSocket.getInputStream();
                 btBuffRdr = new BufferedReader(new InputStreamReader(btInputStream, "ASCII"));
                 btOutputStream = btSocket.getOutputStream();
@@ -554,6 +722,7 @@ public class BatteryRange extends AppCompatActivity
                     } while (!response.equals("OK") && !response.contains("?"));
                 }
                 log("init done");
+                publishProgress("Initialization complete");
 
                 // ask for stream of updates
                 btOutputStream.write(("ATMA\r").getBytes());
@@ -565,7 +734,6 @@ public class BatteryRange extends AppCompatActivity
                         // note that it takes a little while (about 20 seconds) to notice
                         log("disconnected (read)");
                         publishProgress("Device disconnected");
-                        connected = false;
                         btOutputStream.close();
                         btInputStream.close();
                         btSocket.close();
@@ -600,7 +768,6 @@ public class BatteryRange extends AppCompatActivity
                             // (this is kind of weird that this happens)
                             log("disconnected (range): " + data);
                             publishProgress("Device disconnected");
-                            connected = false;
                             btOutputStream.close();
                             btInputStream.close();
                             btSocket.close();
@@ -622,8 +789,8 @@ public class BatteryRange extends AppCompatActivity
                 btOutputStream.close();
                 btInputStream.close();
                 btSocket.close();
-                connected = false;
                 log("disconnect done");
+                publishProgress("Disconnection complete");
             } catch (IOException e) {
                 logExcept(e);
                 publishProgress("BtRange: " + e.getMessage());
@@ -635,7 +802,7 @@ public class BatteryRange extends AppCompatActivity
         protected void onProgressUpdate(String... values) {
             if (values.length > 0) {
                 // we were passed a message to display
-                Toast.makeText(getApplicationContext(), values[0], Toast.LENGTH_LONG).show();
+                Toast.makeText(getApplicationContext(), values[0], Toast.LENGTH_SHORT).show();
                 return;
             }
 
@@ -652,12 +819,14 @@ public class BatteryRange extends AppCompatActivity
 
     // try to connect again after a delay
     void btRetry() {
-        handler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                log("btRetry");
-                btConnect();
-            }
-        }, 5000);
+        if (handler != null) {
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    log("btRetry");
+                    btConnect();
+                }
+            }, 5000);
+        }
     }
 }
