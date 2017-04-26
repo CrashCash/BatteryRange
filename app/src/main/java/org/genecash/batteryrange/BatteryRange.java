@@ -41,6 +41,7 @@ import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.OnMapReadyCallback;
 import com.google.android.gms.maps.SupportMapFragment;
+import com.google.android.gms.maps.model.CameraPosition;
 import com.google.android.gms.maps.model.Circle;
 import com.google.android.gms.maps.model.CircleOptions;
 import com.google.android.gms.maps.model.LatLng;
@@ -78,6 +79,7 @@ public class BatteryRange extends AppCompatActivity
     static final int MENU_DEVICE = 3;
     static final int MENU_ADD_HOME = 4;
     static final int MENU_ADD_DEST = 5;
+    static final int MENU_SEARCH = 6;
 
     // user preferences
     SharedPreferences prefs;
@@ -156,7 +158,11 @@ public class BatteryRange extends AppCompatActivity
         // handle location sent from Google Maps
         if (Intent.ACTION_SEND.equals(action) && type != null && "text/plain".equals(type)) {
             String address[] = intent.getStringExtra(Intent.EXTRA_TEXT).split("\n");
-            setMarker(address[1], null);
+            if (address.length > 1) {
+                setMarker(address[1], null);
+            } else {
+                setMarker(address[0], null);
+            }
         }
 
         // check to see if the GPS is enabled
@@ -342,6 +348,7 @@ public class BatteryRange extends AppCompatActivity
             menu.add(Menu.NONE, MENU_ADD_HOME, Menu.NONE, "Set Home Marker");
             menu.add(Menu.NONE, MENU_ADD_DEST, Menu.NONE, "Set Destination Marker");
         }
+        menu.add(Menu.NONE, MENU_SEARCH, Menu.NONE, "Set Marker By Address/Coordinates");
         menu.add(Menu.NONE, MENU_DEVICE, Menu.NONE, "Select Bluetooth Device");
         super.onPrepareOptionsMenu(menu);
         return true;
@@ -375,6 +382,8 @@ public class BatteryRange extends AppCompatActivity
             case MENU_ADD_DEST:
                 setMarker(MARK_DEST, currLocation.getLatitude(), currLocation.getLongitude());
                 return true;
+            case MENU_SEARCH:
+                setMarker("", null);
         }
         return super.onOptionsItemSelected(item);
     }
@@ -622,6 +631,12 @@ public class BatteryRange extends AppCompatActivity
                 break;
         }
         editor.apply();
+
+        // pan and zoom in one smooth move
+        CameraPosition.Builder camera = new CameraPosition.Builder();
+        camera.target(new LatLng(lat, lng));
+        camera.zoom(15);
+        map.animateCamera(CameraUpdateFactory.newCameraPosition(camera.build()));
     }
 
     // connect to our device and initialize it
