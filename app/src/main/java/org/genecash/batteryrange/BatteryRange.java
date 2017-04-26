@@ -402,6 +402,8 @@ public class BatteryRange extends AppCompatActivity
             map.setMyLocationEnabled(false);
             map.getUiSettings().setMyLocationButtonEnabled(false);
         }
+        map.getUiSettings().setZoomControlsEnabled(true);
+        map.getUiSettings().setRotateGesturesEnabled(false);
     }
 
     // log to our own file so that messages don't get lost
