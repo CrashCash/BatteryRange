@@ -22,3 +22,6 @@ You also need to enable the "Google Maps Geocoding API" for the home/destination
 The UI is rather spartan, but it includes the ability to set a "home" and a "destination" marker on the map.
 
 You can set these from your current location using the options menu, or you can share a location from Google Maps. That is, you can search and select the location in Google Maps, then share it to the Battery Range application. This will pop up a dialog allowing you to select which marker you want to set.
+
+![Screenshot 1](https://raw.githubusercontent.com/CrashCash/BatteryRange/master/Screenshot_20170426-031044_small.png)
+![Screenshot 2](https://raw.githubusercontent.com/CrashCash/BatteryRange/master/Screenshot_20170426-031111_small.png)
