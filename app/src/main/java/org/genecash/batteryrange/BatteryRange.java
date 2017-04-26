@@ -155,8 +155,8 @@ public class BatteryRange extends AppCompatActivity
 
         // handle location sent from Google Maps
         if (Intent.ACTION_SEND.equals(action) && type != null && "text/plain".equals(type)) {
-            String address = intent.getStringExtra(Intent.EXTRA_TEXT).split("\n")[1];
-            setMarker(address, null);
+            String address[] = intent.getStringExtra(Intent.EXTRA_TEXT).split("\n");
+            setMarker(address[1], null);
         }
 
         // check to see if the GPS is enabled
@@ -569,7 +569,7 @@ public class BatteryRange extends AppCompatActivity
                         Geocoder coder = new Geocoder(getApplicationContext());
                         try {
                             List<Address> addresses = coder.getFromLocationName(addressFinal, 1);
-                            if (addressFinal.length() == 0) {
+                            if (addresses.size() == 0) {
                                 Toast.makeText(getApplicationContext(), "Address not found", Toast.LENGTH_LONG).show();
                                 return;
                             } else {
