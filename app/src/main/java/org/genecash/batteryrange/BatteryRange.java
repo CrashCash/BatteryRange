@@ -66,7 +66,7 @@ import java.util.logging.Logger;
 @SuppressWarnings("MissingPermission")
 public class BatteryRange extends AppCompatActivity
         implements OnMapReadyCallback, GoogleApiClient.ConnectionCallbacks, GoogleApiClient.OnConnectionFailedListener, LocationListener,
-                   GoogleMap.OnMapLongClickListener {
+                   GoogleMap.OnMapLongClickListener, GoogleMap.OnMapClickListener {
 
     // housekeeping
     static final int PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION = 1;
@@ -215,6 +215,7 @@ public class BatteryRange extends AppCompatActivity
             markDest = map.addMarker(new MarkerOptions().title("Destination").position(new LatLng(lat, lng)));
         }
 
+        map.setOnMapClickListener(this);
         map.setOnMapLongClickListener(this);
 
         updateLocationUI();
@@ -263,6 +264,15 @@ public class BatteryRange extends AppCompatActivity
         }
 
         resize(position);
+    }
+
+    // handle map tap by showing circles
+    @Override
+    public void onMapClick(LatLng latLng) {
+        boolean old = flagZoom;
+        flagZoom = true;
+        resize();
+        flagZoom = old;
     }
 
     // handle map long-press to place marker
@@ -457,13 +467,6 @@ public class BatteryRange extends AppCompatActivity
                     .fillColor(Color.argb(32, 0, 0, 0))
                     .clickable(true);
             rangeCircle = map.addCircle(circleOptions);
-            map.setOnCircleClickListener(new GoogleMap.OnCircleClickListener() {
-                @Override
-                public void onCircleClick(Circle circle) {
-                    log("onCircleClick");
-                    resize();
-                }
-            });
 
             // inner circle
             CircleOptions circleOptions2 = new CircleOptions()
