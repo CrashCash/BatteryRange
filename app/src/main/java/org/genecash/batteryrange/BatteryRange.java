@@ -269,6 +269,10 @@ public class BatteryRange extends AppCompatActivity
     // handle map tap by showing circles
     @Override
     public void onMapClick(LatLng latLng) {
+        if (currLocation == null) {
+            Toast.makeText(this, "Location not acquired", Toast.LENGTH_LONG).show();
+            return;
+        }
         boolean old = flagZoom;
         flagZoom = true;
         resize();
@@ -450,7 +454,9 @@ public class BatteryRange extends AppCompatActivity
     }
 
     void resize() {
-        resize(new LatLng(currLocation.getLatitude(), currLocation.getLongitude()));
+        if (currLocation != null) {
+            resize(new LatLng(currLocation.getLatitude(), currLocation.getLongitude()));
+        }
     }
 
     // create range circles
@@ -530,6 +536,8 @@ public class BatteryRange extends AppCompatActivity
 
     // dialog to set a marker
     void setMarker(String address, final LatLng latLng) {
+        // TODO implement Google "Place Autocomplete"
+        // https://developers.google.com/places/android-api/autocomplete
         final AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Set Marker");
 
