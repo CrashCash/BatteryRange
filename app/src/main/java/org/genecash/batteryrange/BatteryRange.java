@@ -88,8 +88,10 @@ public class BatteryRange extends AppCompatActivity
     static final String PREFS_DEVICE = "device";
     static final String PREFS_HOME_LAT = "home-lat";
     static final String PREFS_HOME_LNG = "home-lng";
+    static final String PREFS_HOME_SNIP = "home-snip";
     static final String PREFS_DEST_LAT = "dest-lat";
     static final String PREFS_DEST_LNG = "dest-lng";
+    static final String PREFS_DEST_SNIP = "dest-snip";
     // zoom to fit range circle
     boolean flagZoom;
     // center on location
@@ -359,8 +361,8 @@ public class BatteryRange extends AppCompatActivity
             }
         }
         if (currLocation != null) {
-            menu.add(Menu.NONE, MENU_ADD_HOME, Menu.NONE, "Set Home Marker");
-            menu.add(Menu.NONE, MENU_ADD_DEST, Menu.NONE, "Set Destination Marker");
+            menu.add(Menu.NONE, MENU_ADD_HOME, Menu.NONE, "Set Home Marker From GPS");
+            menu.add(Menu.NONE, MENU_ADD_DEST, Menu.NONE, "Set Destination Marker From GPS");
         }
         menu.add(Menu.NONE, MENU_SEARCH, Menu.NONE, "Set Marker By Address/Coordinates");
         menu.add(Menu.NONE, MENU_DEVICE, Menu.NONE, "Select Bluetooth Device");
@@ -391,10 +393,10 @@ public class BatteryRange extends AppCompatActivity
                 selectDevice();
                 return true;
             case MENU_ADD_HOME:
-                setMarker(MARK_HOME, currLocation.getLatitude(), currLocation.getLongitude());
+                setMarker(MARK_HOME, currLocation.getLatitude(), currLocation.getLongitude(), "From GPS");
                 return true;
             case MENU_ADD_DEST:
-                setMarker(MARK_DEST, currLocation.getLatitude(), currLocation.getLongitude());
+                setMarker(MARK_DEST, currLocation.getLatitude(), currLocation.getLongitude(), "From GPS");
                 return true;
             case MENU_SEARCH:
                 setMarker("", null);
@@ -536,9 +538,9 @@ public class BatteryRange extends AppCompatActivity
 
     // dialog to set a marker
     void setMarker(String address, final LatLng latLng) {
-        // TODO implement Google "Place Autocomplete"
-        // https://developers.google.com/places/android-api/autocomplete
-        final AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        // I tried using Google "Place Autocomplete" from https://developers.google.com/places/android-api/autocomplete but passing the
+        // information from the full-featured Google Maps app is much better
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Set Marker");
 
         // set up layout
@@ -549,6 +551,7 @@ public class BatteryRange extends AppCompatActivity
             views = this.getLayoutInflater().inflate(R.layout.dialog_marker_full, null);
         }
         builder.setView(views);
+
         final EditText addressText = (EditText) views.findViewById(R.id.address);
         if (address != null) {
             addressText.setText(address);
@@ -559,6 +562,7 @@ public class BatteryRange extends AppCompatActivity
             public void onClick(DialogInterface dialog, int id) {
                 double lat;
                 double lng;
+                String snippet = "";
 
                 // figure out if we're setting the home or destination marker
                 int flag = MARK_UNKNOWN;
@@ -597,6 +601,7 @@ public class BatteryRange extends AppCompatActivity
                             } else {
                                 lat = addresses.get(0).getLatitude();
                                 lng = addresses.get(0).getLongitude();
+                                snippet = addressFinal;
                             }
                         } catch (IOException e) {
                             logExcept(e);
@@ -607,7 +612,7 @@ public class BatteryRange extends AppCompatActivity
                 }
 
                 // finally actually set a marker
-                setMarker(flag, lat, lng);
+                setMarker(flag, lat, lng, snippet);
             }
         });
 
@@ -622,25 +627,32 @@ public class BatteryRange extends AppCompatActivity
     }
 
     // set a marker with known type and location
-    void setMarker(int flag, double lat, double lng) {
+    void setMarker(int flag, double lat, double lng, String snippet) {
         SharedPreferences.Editor editor = prefs.edit();
+        MarkerOptions options = new MarkerOptions().position(new LatLng(lat, lng));
+        if (snippet != null && snippet.length() > 0) {
+            options.snippet(snippet);
+        }
         switch (flag) {
             case MARK_HOME:
                 if (markHome != null) {
                     markHome.remove();
                 }
-                markHome = map.addMarker(new MarkerOptions().title("Home").position(new LatLng(lat, lng)));
-                // .icon(BitmapDescriptorFactory.fromResource(R.drawable.arrow)));
+                options.title("Home");
+                markHome = map.addMarker(options);
                 editor.putFloat(PREFS_HOME_LAT, (float) lat);
                 editor.putFloat(PREFS_HOME_LNG, (float) lng);
+                editor.putString(PREFS_HOME_SNIP, snippet);
                 break;
             case MARK_DEST:
                 if (markDest != null) {
                     markDest.remove();
                 }
-                markDest = map.addMarker(new MarkerOptions().title("Destination").position(new LatLng(lat, lng)));
+                options.title("Destination");
+                markDest = map.addMarker(options);
                 editor.putFloat(PREFS_DEST_LAT, (float) lat);
                 editor.putFloat(PREFS_DEST_LNG, (float) lng);
+                editor.putString(PREFS_DEST_SNIP, snippet);
                 break;
         }
         editor.apply();
