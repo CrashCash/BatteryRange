@@ -207,14 +207,16 @@ public class BatteryRange extends AppCompatActivity
         // load markers from preferences
         double lat = prefs.getFloat(PREFS_HOME_LAT, 999);
         double lng = prefs.getFloat(PREFS_HOME_LNG, 999);
+        String snippet = prefs.getString(PREFS_HOME_SNIP, "");
         if (lat != 999 && lng != 999) {
-            markHome = map.addMarker(new MarkerOptions().title("Home").position(new LatLng(lat, lng)));
+            markHome = map.addMarker(new MarkerOptions().title("Home").position(new LatLng(lat, lng)).snippet(snippet));
         }
 
         lat = prefs.getFloat(PREFS_DEST_LAT, 999);
         lng = prefs.getFloat(PREFS_DEST_LNG, 999);
+        snippet = prefs.getString(PREFS_DEST_SNIP, "");
         if (lat != 999 && lng != 999) {
-            markDest = map.addMarker(new MarkerOptions().title("Destination").position(new LatLng(lat, lng)));
+            markDest = map.addMarker(new MarkerOptions().title("Destination").position(new LatLng(lat, lng)).snippet(snippet));
         }
 
         map.setOnMapClickListener(this);
