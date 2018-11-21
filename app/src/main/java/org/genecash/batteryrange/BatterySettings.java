@@ -6,6 +6,7 @@ import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.preference.PreferenceManager;
 import android.support.annotation.Nullable;
+import android.support.v4.content.LocalBroadcastManager;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.Toast;
@@ -44,7 +45,7 @@ public class BatterySettings extends Activity {
                 if (editor.commit()) {
                     Toast.makeText(getApplicationContext(), "Settings saved", Toast.LENGTH_LONG).show();
                     // tell running app about new setting
-                    sendBroadcast(new Intent(BatteryRange.ACTION_UPDATE));
+                    LocalBroadcastManager.getInstance(getApplicationContext()).sendBroadcast(new Intent(BatteryRange.ACTION_UPDATE));
                     finish();
                 } else {
                     Toast.makeText(getApplicationContext(), "Settings error", Toast.LENGTH_LONG).show();
