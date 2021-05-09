@@ -23,6 +23,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.preference.PreferenceManager;
 import android.support.v4.app.FragmentActivity;
+import android.support.v4.content.LocalBroadcastManager;
 import android.text.format.DateUtils;
 import android.util.Log;
 import android.view.Menu;
@@ -54,6 +55,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -147,7 +149,7 @@ public class BatteryRange extends FragmentActivity
     BtRange rangeTask;
     volatile boolean running;
     // well known serial device SPP
-    UUID uuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
+    UUID uuid_spp = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
 
     // update bullshit factor when changed in settings screen
     BroadcastReceiver broadcastReceiver = new BroadcastReceiver() {
@@ -198,14 +200,6 @@ public class BatteryRange extends FragmentActivity
             }
         }
 
-        // check to see if the GPS is enabled
-        locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
-        if (!locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-            Toast.makeText(this, "GPS is not enabled", Toast.LENGTH_LONG).show();
-            finish();
-            return;
-        }
-
         // read preferences
         prefs = PreferenceManager.getDefaultSharedPreferences(this);
         bullshit_factor = prefs.getInt(PREFS_BULLSHIT_FACTOR, 35) * 1000;
@@ -215,7 +209,13 @@ public class BatteryRange extends FragmentActivity
         if (btName == null || btName.length() == 0) {
             selectDevice();
         }
-        registerReceiver(broadcastReceiver, new IntentFilter(ACTION_UPDATE));
+        LocalBroadcastManager.getInstance(this).registerReceiver(broadcastReceiver, new IntentFilter(ACTION_UPDATE));
+
+        // check to see if the GPS is enabled
+        locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
+        if (!locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+            Toast.makeText(this, "GPS is not enabled", Toast.LENGTH_LONG).show();
+        }
 
         // build the Play services client for use by the Fused Location Provider and the Places API
         if (locationPermissionGranted) {
@@ -281,6 +281,7 @@ public class BatteryRange extends FragmentActivity
     // handles suspension of the connection to the Google Play services client
     @Override
     public void onConnectionSuspended(int i) {
+        log("onConnectionSuspended: " + i);
     }
 
     // handles failure to connect to the Google Play services client
@@ -298,17 +299,17 @@ public class BatteryRange extends FragmentActivity
 
     @Override
     public void onStatusChanged(String provider, int status, Bundle extras) {
-
+        log("onStatusChanged: " + provider + " (" + status + ")");
     }
 
     @Override
     public void onProviderEnabled(String provider) {
-
+        log("onProviderEnabled: " + provider);
     }
 
     @Override
     public void onProviderDisabled(String provider) {
-
+        log("onProviderDisabled: " + provider);
     }
 
     // handle map tap by showing circles
@@ -642,11 +643,11 @@ public class BatteryRange extends FragmentActivity
         }
         builder.setView(views);
 
-        final EditText addressText = (EditText) views.findViewById(R.id.address);
+        final EditText addressText = views.findViewById(R.id.address);
         if (address != null) {
             addressText.setText(address);
         }
-        final RadioGroup radioGroup = (RadioGroup) views.findViewById(R.id.radiobuttons);
+        final RadioGroup radioGroup = views.findViewById(R.id.radiobuttons);
 
         builder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
             public void onClick(DialogInterface dialog, int id) {
@@ -837,16 +838,16 @@ public class BatteryRange extends FragmentActivity
             try {
                 // connect to dongle as a serial port I/O device
                 publishProgress("Connecting to device");
-                btSocket = btDevice.createInsecureRfcommSocketToServiceRecord(uuid);
+                btSocket = btDevice.createInsecureRfcommSocketToServiceRecord(uuid_spp);
                 btSocket.connect();
                 publishProgress("Device connected");
                 btInputStream = btSocket.getInputStream();
-                btBuffRdr = new BufferedReader(new InputStreamReader(btInputStream, "ASCII"));
+                btBuffRdr = new BufferedReader(new InputStreamReader(btInputStream, StandardCharsets.US_ASCII));
                 btOutputStream = btSocket.getOutputStream();
 
                 // stop any output stream
                 // also ensures we get a prompt
-                btOutputStream.write(("X\r").getBytes());
+                btOutputStream.write(("\r").getBytes());
 
                 // initialize
                 // WS     - reset
@@ -855,7 +856,7 @@ public class BatteryRange extends FragmentActivity
                 // CAF0   - automatic formatting off
                 // JHF0   - header formatting off
                 // CRA440 - filter to only 0x440
-                String[] btInit = new String[]{"WS", "WS", "S0", "SP6", "CAF0", "JHF0", "CRA440"};
+                String[] btInit = new String[]{"WS", "WS", "S0", "SP6", "CAF0", "JHF0", "H1" , "CF440", "CM7FF"};
                 for (String s : btInit) {
                     waitPrompt();
                     btOutputStream.write(("AT" + s + "\r").getBytes());
@@ -864,7 +865,7 @@ public class BatteryRange extends FragmentActivity
 
                 // ask for stream of updates
                 waitPrompt();
-                btOutputStream.write(("ATMA\r").getBytes());
+                btOutputStream.write(("\r").getBytes());
                 while (running && !flagTest) {
                     data = btBuffRdr.readLine();
                     // not our message
@@ -879,6 +880,7 @@ public class BatteryRange extends FragmentActivity
                     oldData = data;
 
                     // data line looks like 7E110200144D0410
+                    // 7E 11 02 00 14 4D 04 10
                     // range (miles) = 0x4D14/160.9
                     // range (km) = 0x4D14/100
                     // range (meters) = 0x4D14*10
@@ -902,7 +904,7 @@ public class BatteryRange extends FragmentActivity
                 }
 
                 // stop output stream
-                btOutputStream.write(("X\r").getBytes());
+                btOutputStream.write(("\r").getBytes());
 
                 // close nicely
                 btOutputStream.close();

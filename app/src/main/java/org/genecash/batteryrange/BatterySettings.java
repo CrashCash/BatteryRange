@@ -25,7 +25,7 @@ public class BatterySettings extends Activity {
         prefs = PreferenceManager.getDefaultSharedPreferences(this);
 
         // find fields
-        edBS = (EditText) findViewById(R.id.bullshit_factor);
+        edBS = findViewById(R.id.bullshit_factor);
 
         // populate fields from current settings
         edBS.setText("" + prefs.getInt(PREFS_BULLSHIT_FACTOR, 35));
