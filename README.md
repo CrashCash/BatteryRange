@@ -1,9 +1,5 @@
 # BatteryRange
-This application snoops the CANBUS on Zero electric motorcycle via a Bluetooth OBD-II dongle to provide a range map display.
-
-See https://crashcash.github.io/zero_canbus/index.html for information on the CANBUS messages.
-
-See https://crashcash.github.io/obd-II_dongle/index.html on installing a dongle.
+Grab the current range from a Zero electric motorcycle via Bluetooth and display the range on Google Maps.
 
 This is an Android Studio project.
 

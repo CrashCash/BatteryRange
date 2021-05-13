@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android = "http://schemas.android.com/apk/res/android"
-          xmlns:tools = "http://schemas.android.com/tools"
-          package = "org.genecash.batteryrange"
-          android:versionCode = "1544873487"
-          android:versionName = "15-DEC-2018 06:31:27 AM">
+    xmlns:tools = "http://schemas.android.com/tools"
+    package = "org.genecash.batteryrange"
+    android:versionCode = "1620835309"
+    android:versionName = "12-MAY-2021 12:01:49 PM">
 
     <uses-permission android:name = "android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name = "android.permission.INTERNET" />

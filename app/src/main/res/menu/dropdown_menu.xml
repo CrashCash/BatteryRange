@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android = "http://schemas.android.com/apk/res/android">
+    <item
+        android:id = "@+id/action_fit_range"
+        android:checkable = "true"
+        android:onClick = "menuToggleFitRange"
+        android:title = "Zoom To Fit Range" />
+    <item
+        android:id = "@+id/action_center"
+        android:checkable = "true"
+        android:onClick = "menuToggleCenter"
+        android:title = "Center Map On Location" />
+    <item
+        android:id = "@+id/action_set_home"
+        android:onClick = "menuSetHome"
+        android:title = "Set Home Marker From GPS" />
+    <item
+        android:id = "@+id/action_set_dest"
+        android:onClick = "menuSetDest"
+        android:title = "Set Destination Marker From GPS" />
+    <item
+        android:id = "@+id/action_set_marker"
+        android:onClick = "menuSetMarker"
+        android:title = "Set Marker By Address/Coordinates" />
+    <item
+        android:id = "@+id/action_select_device"
+        android:onClick = "menuSelectDevice"
+        android:title = "Select Bluetooth Device" />
+    <item
+        android:id = "@+id/action_setup"
+        android:onClick = "menuSetup"
+        android:title = "Setup Screen" />
+</menu>

@@ -23,10 +23,11 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.preference.PreferenceManager;
 import android.support.v4.app.FragmentActivity;
-import android.support.v4.content.LocalBroadcastManager;
 import android.text.format.DateUtils;
+import android.util.Base64;
 import android.util.Log;
 import android.view.Menu;
+import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.EditText;
@@ -50,12 +51,10 @@ import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
 import com.google.maps.android.SphericalUtil;
 
-import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -69,20 +68,13 @@ public class BatteryRange extends FragmentActivity
         implements OnMapReadyCallback, GoogleApiClient.ConnectionCallbacks, GoogleApiClient.OnConnectionFailedListener, LocationListener,
                    GoogleMap.OnMapLongClickListener, GoogleMap.OnMapClickListener {
 
+    // testing the GUI w/o actually connecting
+    boolean testing = false;
+
     // housekeeping
     static final int PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION = 1;
     static final String TAG = BatteryRange.class.getSimpleName();
     static final Logger loggerSet = Logger.getLogger("logger");
-
-    // popup menu
-    static final int MENU_ZOOM = 1;
-    static final int MENU_CENTER = 2;
-    static final int MENU_DEVICE = 3;
-    static final int MENU_ADD_HOME = 4;
-    static final int MENU_ADD_DEST = 5;
-    static final int MENU_SEARCH = 6;
-    static final int MENU_SETUP = 7;
-    static final int MENU_TEST = 8;
 
     // user preferences
     SharedPreferences prefs;
@@ -107,10 +99,6 @@ public class BatteryRange extends FragmentActivity
     // center on location
     boolean flagCenter;
 
-    // testing
-    boolean flagTest = false;
-    long testTime;
-
     // Google Map
     GoogleMap map;
     GoogleApiClient googleApiClient;
@@ -130,7 +118,7 @@ public class BatteryRange extends FragmentActivity
 
     // this is the range (meters) at which power drops to zero
     // this was discovered to be necessary after getting stranded
-    double bullshit_factor;
+    public static double bullshit_factor;
 
     Marker markHome = null;
     Marker markDest = null;
@@ -139,24 +127,44 @@ public class BatteryRange extends FragmentActivity
     static final int MARK_DEST = 2;
 
     // Bluetooth
+    BluetoothAdapter btAdapter;
     Handler handler;
     String btName;
     BluetoothDevice btDevice;
-    BluetoothSocket btSocket = null;
-    InputStream btInputStream;
-    OutputStream btOutputStream;
-    BufferedReader btBuffRdr;
     BtRange rangeTask;
-    volatile boolean running;
+
+    static final int STATUS_RUNNING = 0;
+    static final int STATUS_STOP = 1;
+    static final int STATUS_FINISHED = 2;
+    volatile int status = STATUS_FINISHED;
+
     // well known serial device SPP
     UUID uuid_spp = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
 
-    // update bullshit factor when changed in settings screen
-    BroadcastReceiver broadcastReceiver = new BroadcastReceiver() {
+    // DSt2 packet
+    // Python: import base64; base64.b64encode(x)
+    byte[] cmd = Base64.decode("8fL0+AAAAABEU3Qy+PTy8RB5r/g=", Base64.DEFAULT);
+
+    // response trailer
+    byte[] trailer = new byte[]{(byte) 0xF8, (byte) 0xF4, (byte) 0xF2, (byte) 0xF1};
+
+    // deal with Bluetooth turning on and off
+    private final BroadcastReceiver btReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            if (ACTION_UPDATE.equals(intent.getAction())) {
-                bullshit_factor = prefs.getInt(PREFS_BULLSHIT_FACTOR, 35) * 1000;
+            String action = intent.getAction();
+
+            if (BluetoothAdapter.ACTION_STATE_CHANGED.equals(action)) {
+                int state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1);
+
+                switch (state) {
+                    case BluetoothAdapter.STATE_OFF:
+                        status = STATUS_FINISHED;
+                        break;
+                    case BluetoothAdapter.STATE_ON:
+                        btConnect();
+                        break;
+                }
             }
         }
     };
@@ -206,10 +214,15 @@ public class BatteryRange extends FragmentActivity
         flagCenter = prefs.getBoolean(PREFS_CENTER, true);
         flagZoom = prefs.getBoolean(PREFS_ZOOM, true);
         btName = prefs.getString(PREFS_DEVICE, null);
-        if (btName == null || btName.length() == 0) {
-            selectDevice();
+
+        btAdapter = BluetoothAdapter.getDefaultAdapter();
+        if (btAdapter == null) {
+            Toast.makeText(this, "Phone does not support Bluetooth", Toast.LENGTH_LONG).show();
+            // this is fatal
+            return;
         }
-        LocalBroadcastManager.getInstance(this).registerReceiver(broadcastReceiver, new IntentFilter(ACTION_UPDATE));
+
+        registerReceiver(btReceiver, new IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED));
 
         // check to see if the GPS is enabled
         locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
@@ -295,6 +308,9 @@ public class BatteryRange extends FragmentActivity
     public void onLocationChanged(Location location) {
         currLocation = location;
         updateCircles();
+        if (status != STATUS_RUNNING) {
+            btConnect();
+        }
     }
 
     @Override
@@ -332,10 +348,7 @@ public class BatteryRange extends FragmentActivity
     @Override
     protected void onPause() {
         // disconnect from Bluetooth and stop connection retries
-        running = false;
-        if (rangeTask != null) {
-            rangeTask.cancel(false);
-        }
+        status = STATUS_STOP;
         handler = null;
 
         // remove circles
@@ -364,8 +377,10 @@ public class BatteryRange extends FragmentActivity
     @Override
     protected void onResume() {
         super.onResume();
-        running = true;
         handler = new Handler();
+
+        // start talking to bike again
+        btConnect();
 
         // turn on location updates
         if (googleApiClient != null && googleApiClient.isConnected()) {
@@ -376,7 +391,7 @@ public class BatteryRange extends FragmentActivity
     @Override
     protected void onDestroy() {
         try {
-            unregisterReceiver(broadcastReceiver);
+            unregisterReceiver(btReceiver);
         } catch (Exception e) {
             // there's no way to tell if a receiver has been registered...
             // you have to just unregister it anyway and deal
@@ -404,83 +419,68 @@ public class BatteryRange extends FragmentActivity
         updateLocationUI();
     }
 
-    // populate the options menu when clicked
+    // populate the options menu
     @Override
-    public boolean onPrepareOptionsMenu(Menu menu) {
-        menu.clear();
-        if (flagTest) {
-            menu.add(Menu.NONE, MENU_TEST, Menu.NONE, "Testing mode");
-        } else {
-            menu.add(Menu.NONE, MENU_TEST, Menu.NONE, "Normal mode");
-        }
-
-        if (flagZoom) {
-            menu.add(Menu.NONE, MENU_ZOOM, Menu.NONE, "Zoom To Fit Range");
-        } else {
-            menu.add(Menu.NONE, MENU_ZOOM, Menu.NONE, "Do Not Zoom To Fit Range");
-        }
-
-        if (flagCenter) {
-            menu.add(Menu.NONE, MENU_CENTER, Menu.NONE, "Center Map On Location");
-        } else {
-            menu.add(Menu.NONE, MENU_CENTER, Menu.NONE, "Do Not Center Map On Location");
-        }
-
-        if (currLocation != null) {
-            menu.add(Menu.NONE, MENU_ADD_HOME, Menu.NONE, "Set Home Marker From GPS");
-            menu.add(Menu.NONE, MENU_ADD_DEST, Menu.NONE, "Set Destination Marker From GPS");
-        }
-
-        menu.add(Menu.NONE, MENU_SEARCH, Menu.NONE, "Set Marker By Address/Coordinates");
-        menu.add(Menu.NONE, MENU_DEVICE, Menu.NONE, "Select Bluetooth Device");
-        menu.add(Menu.NONE, MENU_SETUP, Menu.NONE, "Setup Screen");
-        super.onPrepareOptionsMenu(menu);
+    public boolean onCreateOptionsMenu(Menu menu) {
+        MenuInflater inflater = getMenuInflater();
+        inflater.inflate(R.menu.dropdown_menu, menu);
+        MenuItem check = menu.findItem(R.id.action_fit_range);
+        check.setChecked(flagZoom);
+        check = menu.findItem(R.id.action_center);
+        check.setChecked(flagCenter);
+        super.onCreateOptionsMenu(menu);
         return true;
     }
 
-    // handle options menu selection
-    @Override
-    public boolean onOptionsItemSelected(MenuItem item) {
+    public void menuToggleFitRange(MenuItem item) {
         SharedPreferences.Editor editor;
-        switch (item.getItemId()) {
-            case MENU_TEST:
-                flagTest = !flagTest;
-                if (flagTest) {
-                    testTime = System.currentTimeMillis();
-                }
-                return true;
-            case MENU_ZOOM:
-                flagZoom = !flagZoom;
-                resize();
-                editor = prefs.edit();
-                editor.putBoolean(PREFS_ZOOM, flagZoom);
-                editor.apply();
-                return true;
-            case MENU_CENTER:
-                flagCenter = !flagCenter;
-                resize();
-                editor = prefs.edit();
-                editor.putBoolean(PREFS_CENTER, flagCenter);
-                editor.apply();
-                return true;
-            case MENU_DEVICE:
-                selectDevice();
-                return true;
-            case MENU_ADD_HOME:
-                setMarker(MARK_HOME, currLocation.getLatitude(), currLocation.getLongitude(), "From GPS");
-                return true;
-            case MENU_ADD_DEST:
-                setMarker(MARK_DEST, currLocation.getLatitude(), currLocation.getLongitude(), "From GPS");
-                return true;
-            case MENU_SEARCH:
-                setMarker("", null);
-                return true;
-            case MENU_SETUP:
-                Intent i = new Intent(this, BatterySettings.class);
-                startActivity(i);
-                return true;
+
+        flagZoom = !flagZoom;
+        item.setChecked(flagZoom);
+        resize();
+        editor = prefs.edit();
+        editor.putBoolean(PREFS_ZOOM, flagZoom);
+        editor.apply();
+    }
+
+    public void menuToggleCenter(MenuItem item) {
+        SharedPreferences.Editor editor;
+
+        flagCenter = !flagCenter;
+        item.setChecked(flagCenter);
+        resize();
+        editor = prefs.edit();
+        editor.putBoolean(PREFS_CENTER, flagCenter);
+        editor.apply();
+    }
+
+    public void menuSetHome(MenuItem item) {
+        if (currLocation == null) {
+            Toast.makeText(getApplicationContext(), "No GPS location", Toast.LENGTH_LONG).show();
+        } else {
+            setMarker(MARK_HOME, currLocation.getLatitude(), currLocation.getLongitude(), "Home");
         }
-        return super.onOptionsItemSelected(item);
+    }
+
+    public void menuSetDest(MenuItem item) {
+        if (currLocation == null) {
+            Toast.makeText(getApplicationContext(), "No GPS location", Toast.LENGTH_LONG).show();
+        } else {
+            setMarker(MARK_DEST, currLocation.getLatitude(), currLocation.getLongitude(), "Destination");
+        }
+    }
+
+    public void menuSetMarker(MenuItem item) {
+        setMarker("", null);
+    }
+
+    public void menuSelectDevice(MenuItem item) {
+        selectDevice();
+    }
+
+    public void menuSetup(MenuItem item) {
+        Intent i = new Intent(this, BatterySettings.class);
+        startActivity(i);
     }
 
     // updates the map's UI settings based on whether the user has granted location permission
@@ -503,7 +503,7 @@ public class BatteryRange extends FragmentActivity
     // log to our own file so that messages don't get lost
     void log(String msg) {
         Log.i(TAG, msg);
-        loggerSet.info(msg);
+        //loggerSet.info(msg);
     }
 
     // log exceptions so everyone sees them
@@ -511,7 +511,7 @@ public class BatteryRange extends FragmentActivity
         String msg = Log.getStackTraceString(e);
         String fcn = e.getStackTrace()[0].getMethodName();
         Log.i(TAG, fcn, e);
-        loggerSet.info(fcn + " exception:" + msg);
+        //loggerSet.info(fcn + " exception:" + msg);
     }
 
     // handle map repositioning
@@ -576,15 +576,23 @@ public class BatteryRange extends FragmentActivity
         resize();
     }
 
-    // pop up dialog to pick device
+    // pop up dialog to pick motorcycle device
     void selectDevice() {
         // get paired devices
         List<String> devices = new ArrayList<>();
         BluetoothAdapter btAdapter = BluetoothAdapter.getDefaultAdapter();
         for (BluetoothDevice device : btAdapter.getBondedDevices()) {
             if (device.getType() == BluetoothDevice.DEVICE_TYPE_CLASSIC) {
-                devices.add(device.getName() + " (" + device.getAddress() + ")");
+                String name = device.getName();
+                if (name.startsWith("ZeroMotorcycles")) {
+                    devices.add(name + " (" + device.getAddress() + ")");
+                }
             }
+        }
+
+        if (devices.size() == 0) {
+            Toast.makeText(getApplicationContext(), "No paired motorcycles!", Toast.LENGTH_LONG).show();
+            return;
         }
 
         // convert to array needed by dialog & sort
@@ -610,11 +618,13 @@ public class BatteryRange extends FragmentActivity
                 editor.apply();
 
                 // disconnect from current device
-                running = false;
-                while (btSocket != null && btSocket.isConnected()) {
-                    try {
-                        Thread.sleep(250);
-                    } catch (InterruptedException e) {
+                if (status == STATUS_RUNNING) {
+                    status = STATUS_STOP;
+                    while (status != STATUS_FINISHED) {
+                        try {
+                            Thread.sleep(250);
+                        } catch (InterruptedException e) {
+                        }
                     }
                 }
 
@@ -755,169 +765,138 @@ public class BatteryRange extends FragmentActivity
         map.animateCamera(CameraUpdateFactory.newCameraPosition(camera.build()));
     }
 
-    // connect to our device and initialize it
+    // connect to the bike
     void btConnect() {
-        // punt if we've exited the app
-        if (handler == null) {
-            return;
-        }
-        // basic checks
-        if (btName == null) {
-            return;
-        }
-        BluetoothAdapter btAdapter = BluetoothAdapter.getDefaultAdapter();
-        if (btAdapter == null) {
-            // phone does not support Bluetooth
-            Toast.makeText(this, "Phone does not support Bluetooth", Toast.LENGTH_LONG).show();
-            return;
-        }
-        if (!btAdapter.isEnabled()) {
-            // Bluetooth not enabled
-            Toast.makeText(this, "Bluetooth not enabled", Toast.LENGTH_LONG).show();
-            finish();
-            return;
-        }
-
-        // look for our device in the paired devices
-        Set<BluetoothDevice> pairedDevices = btAdapter.getBondedDevices();
-        btDevice = null;
-        if (pairedDevices.size() > 0) {
-            for (BluetoothDevice device : pairedDevices) {
-                String name = device.getName();
-                if (btName.equals(name)) {
-                    btDevice = device;
-                    break;
-                }
-            }
-        }
-        if (btDevice == null) {
-            // our device is not currently paired
-            Toast.makeText(this, "Device is not currently paired", Toast.LENGTH_LONG).show();
-            return;
-        }
-
-        // handle data from device
         rangeTask = new BtRange();
         rangeTask.execute();
     }
 
-    // handle data from the dongle and decode range information
+    // I can't believe this isn't in Java - what a steaming pile
+    public int find(byte[] buffer, byte[] key) {
+        for (int i = 0; i <= buffer.length - key.length; i++) {
+            int j = 0;
+            while (j < key.length && buffer[i + j] == key[j]) {
+                j++;
+            }
+            if (j == key.length) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    // handle data from the bike and decode range information
     class BtRange extends AsyncTask<Void, String, Void> {
         @Override
         protected Void doInBackground(Void... params) {
-            String data;
-            String oldData = null;
-            String hex;
-            double oldRange = range;
-            running = true;
+            double oldRange = 0;
+            BluetoothSocket btSocket = null;
+            InputStream btInputStream = null;
+            OutputStream btOutputStream = null;
 
-            // output a steadily decreasing range for testing
-            if (flagTest) {
-                while (flagTest) {
-                    long t = System.currentTimeMillis();
-                    if (t - testTime > 1000) {
-                        if (range < 1000) {
-                            // 100km
-                            range = 100000;
-                        }
-                        Log.i("batteryrange", "testing: " + range);
-                        testTime = t;
-                        range -= 1000;
-                        publishProgress();
-                    }
-                }
-                btRetry();
+            status = STATUS_FINISHED;
+            if (handler == null || btName == null) {
+                return null;
+            }
+            if (!btAdapter.isEnabled()) {
+                // Bluetooth not enabled
+                publishProgress("Bluetooth not enabled");
                 return null;
             }
 
-            // punt if we've exited the app
-            if (handler == null) {
+            if (btDevice == null) {
+                // look for our device in the paired devices
+                Set<BluetoothDevice> pairedDevices = btAdapter.getBondedDevices();
+                btDevice = null;
+                if (pairedDevices.size() > 0) {
+                    for (BluetoothDevice device : pairedDevices) {
+                        String name = device.getName();
+                        if (btName.equals(name)) {
+                            btDevice = device;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (btDevice == null) {
+                publishProgress("Motorcycle not paired");
                 return null;
             }
 
             try {
-                // connect to dongle as a serial port I/O device
+                // connect to bike
                 publishProgress("Connecting to device");
                 btSocket = btDevice.createInsecureRfcommSocketToServiceRecord(uuid_spp);
-                btSocket.connect();
+                if (!testing) {
+                    btSocket.connect();
+                }
                 publishProgress("Device connected");
                 btInputStream = btSocket.getInputStream();
-                btBuffRdr = new BufferedReader(new InputStreamReader(btInputStream, StandardCharsets.US_ASCII));
                 btOutputStream = btSocket.getOutputStream();
 
-                // stop any output stream
-                // also ensures we get a prompt
-                btOutputStream.write(("\r").getBytes());
+                status = STATUS_RUNNING;
+                while (status == STATUS_RUNNING) {
+                    if (!testing) {
+                        // write command packet
+                        btOutputStream.write(cmd);
 
-                // initialize
-                // WS     - reset
-                // S0     - suppress spaces
-                // SP6    - use CANBUS protocol
-                // CAF0   - automatic formatting off
-                // JHF0   - header formatting off
-                // CRA440 - filter to only 0x440
-                String[] btInit = new String[]{"WS", "WS", "S0", "SP6", "CAF0", "JHF0", "H1" , "CF440", "CM7FF"};
-                for (String s : btInit) {
-                    waitPrompt();
-                    btOutputStream.write(("AT" + s + "\r").getBytes());
-                }
-                publishProgress("Initialization complete");
+                        // read response packet
+                        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                        byte[] data = new byte[1024];
+                        byte[] packet = null;
+                        boolean complete = false;
+                        while (!complete) {
+                            // really should do a select(), but Java makes that impossible
+                            int ctr = btInputStream.read(data);
+                            if (ctr != -1) {
+                                break;
+                            }
+                            buffer.write(data, 0, ctr);
+                            // did we get the trailer & checksum?
+                            packet = buffer.toByteArray();
+                            int i = find(packet, trailer);
+                            complete = (i > 0) && ((packet.length - i) == 8);
+                        }
 
-                // ask for stream of updates
-                waitPrompt();
-                btOutputStream.write(("\r").getBytes());
-                while (running && !flagTest) {
-                    data = btBuffRdr.readLine();
-                    // not our message
-                    if (data == null || data.length() != 16) {
-                        continue;
+                        // extract range in meters
+                        range = (packet[16] + 256 * packet[17]) * 10.0;
+                    } else {
+                        // fake range for testing GUI
+                        if (range < 0) {
+                            range = 80000;
+                        }
+                        range -= 2500;
                     }
-
-                    // no change, no need to process
-                    if (data.equals(oldData)) {
-                        continue;
-                    }
-                    oldData = data;
-
-                    // data line looks like 7E110200144D0410
-                    // 7E 11 02 00 14 4D 04 10
-                    // range (miles) = 0x4D14/160.9
-                    // range (km) = 0x4D14/100
-                    // range (meters) = 0x4D14*10
-                    hex = data.substring(10, 12) + data.substring(8, 10);
-                    range = (Integer.parseInt(hex, 16) * 10);
+                    log("RANGE: " + range);
                     if (range != oldRange) {
                         oldRange = range;
                         publishProgress();
-
-                        // device disconnected because the key was turned off
-                        // note that we find out instantly here
-                        // (this is kind of weird that this happens)
-                        if (data.equals("0000000000000000")) {
-                            publishProgress("Device disconnected (zero range)");
-
-                            // try again soon
-                            btRetry();
-                            return null;
-                        }
                     }
+                    Thread.sleep(5 * 1000);
                 }
-
-                // stop output stream
-                btOutputStream.write(("\r").getBytes());
-
-                // close nicely
-                btOutputStream.close();
-                btInputStream.close();
-                btSocket.close();
             } catch (Exception e) {
-                if (!e.getMessage().equals("bt socket closed, read return: -1") &&
-                    !e.getMessage().equals("read failed, socket might closed or timeout, read ret: -1")) {
-                    publishProgress("BtRange: " + e.getMessage());
-                    logExcept(e);
-                }
-                btRetry();
+                publishProgress("BtRange: " + e.getMessage());
+                logExcept(e);
             }
+
+            try {
+                btOutputStream.close();
+            } catch (IOException e) {
+                publishProgress("btOutputStream.close(): " + e.getMessage());
+            }
+            try {
+                btInputStream.close();
+            } catch (IOException e) {
+                publishProgress("btInputStream.close: " + e.getMessage());
+            }
+            try {
+                btSocket.close();
+            } catch (IOException e) {
+                publishProgress("btSocket.close: " + e.getMessage());
+            }
+
+            status = STATUS_FINISHED;
             return null;
         }
 
@@ -926,6 +905,7 @@ public class BatteryRange extends FragmentActivity
             if (values.length > 0) {
                 // we were passed a message to display
                 Toast.makeText(getApplicationContext(), values[0], Toast.LENGTH_SHORT).show();
+                log(values[0]);
                 return;
             }
 
@@ -933,41 +913,5 @@ public class BatteryRange extends FragmentActivity
             updateCircles();
         }
     }
-
-    void waitPrompt() throws IOException {
-        int c;
-
-        do {
-            c = btBuffRdr.read();
-        } while (c != '>');
-    }
-
-    // try to connect again after a delay
-    void btRetry() {
-        // close everything
-        try {
-            if (btOutputStream != null) {
-                btOutputStream.close();
-            }
-            if (btInputStream != null) {
-                btInputStream.close();
-            }
-            if (btSocket != null) {
-                btSocket.close();
-            }
-        } catch (IOException e) {
-        }
-
-        // remove circles
-        range = 0;
-
-        if (handler != null) {
-            handler.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    btConnect();
-                }
-            }, 2000);
-        }
-    }
 }
+
