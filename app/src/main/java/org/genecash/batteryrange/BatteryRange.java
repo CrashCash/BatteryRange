@@ -826,7 +826,7 @@ public class BatteryRange extends FragmentActivity
 
             try {
                 // connect to bike
-                publishProgress("Connecting to device");
+                publishProgress("Connecting to bike");
                 btSocket = btDevice.createInsecureRfcommSocketToServiceRecord(uuid_spp);
                 if (!testing) {
                     btSocket.connect();
@@ -849,7 +849,7 @@ public class BatteryRange extends FragmentActivity
                         while (!complete) {
                             // really should do a select(), but Java makes that impossible
                             int ctr = btInputStream.read(data);
-                            if (ctr != -1) {
+                            if (ctr == -1) {
                                 break;
                             }
                             buffer.write(data, 0, ctr);
@@ -876,22 +876,34 @@ public class BatteryRange extends FragmentActivity
                     Thread.sleep(5 * 1000);
                 }
             } catch (Exception e) {
-                publishProgress("BtRange: " + e.getMessage());
+                // if anything goes wrong, remove the range circles
+                range = 0;
+                updateCircles();
+                String msg = e.getMessage();
+                if (!msg.contains("read ret: -1") ) {
+                    publishProgress("BtRange: " + e.getMessage());
+                }
                 logExcept(e);
             }
 
             try {
-                btOutputStream.close();
+                if (btOutputStream != null) {
+                    btOutputStream.close();
+                }
             } catch (IOException e) {
                 publishProgress("btOutputStream.close(): " + e.getMessage());
             }
             try {
-                btInputStream.close();
+                if (btInputStream != null) {
+                    btInputStream.close();
+                }
             } catch (IOException e) {
                 publishProgress("btInputStream.close: " + e.getMessage());
             }
             try {
-                btSocket.close();
+                if (btSocket != null) {
+                    btSocket.close();
+                }
             } catch (IOException e) {
                 publishProgress("btSocket.close: " + e.getMessage());
             }

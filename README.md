@@ -14,6 +14,15 @@ The google_maps_api.xml files should look like:
 ```
 You also need to enable the "Google Maps Geocoding API" for the home/destination markers to work.
 
+## Pairing with the bike
+* Put the phone in Bluetooth pairing mode.
+* Put the kickstand down.
+* Turn off the kill switch.
+* Hold down the mode button.
+* Turn on the bike.
+* Wait until the Bluetooth icon flashes. (about 5-10 seconds)
+* Release mode button.
+
 ## User Interface
 The UI is rather spartan, but it includes the ability to set a "home" and a "destination" marker on the map.
 
