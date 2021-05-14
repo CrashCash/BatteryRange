@@ -7,7 +7,6 @@ import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothSocket;
 import android.content.BroadcastReceiver;
 import android.content.Context;
-import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
@@ -20,8 +19,8 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.AsyncTask;
 import android.os.Bundle;
-import android.os.Handler;
 import android.preference.PreferenceManager;
+import android.support.annotation.NonNull;
 import android.support.v4.app.FragmentActivity;
 import android.text.format.DateUtils;
 import android.util.Base64;
@@ -91,7 +90,6 @@ public class BatteryRange extends FragmentActivity
     static final String PREFS_SAVE_LNG = "save-lng";
     static final String PREFS_SAVE_ZOOM = "save-zoom";
     static final String PREFS_BULLSHIT_FACTOR = "bullshit-factor";
-    static final String ACTION_UPDATE = "org.genecash.batteryrange.update";
 
     // zoom to fit range circle
     boolean flagZoom;
@@ -128,7 +126,6 @@ public class BatteryRange extends FragmentActivity
 
     // Bluetooth
     BluetoothAdapter btAdapter;
-    Handler handler;
     String btName;
     BluetoothDevice btDevice;
     BtRange rangeTask;
@@ -200,7 +197,7 @@ public class BatteryRange extends FragmentActivity
 
         // handle location sent from Google Maps
         if (Intent.ACTION_SEND.equals(action) && type != null && "text/plain".equals(type)) {
-            String address[] = intent.getStringExtra(Intent.EXTRA_TEXT).split("\n");
+            String[] address = intent.getStringExtra(Intent.EXTRA_TEXT).split("\n");
             if (address.length > 1) {
                 setMarker(address[1], null);
             } else {
@@ -267,12 +264,7 @@ public class BatteryRange extends FragmentActivity
         map.setOnMapLongClickListener(this);
 
         // the circle click overrides the map click
-        map.setOnCircleClickListener(new GoogleMap.OnCircleClickListener() {
-            @Override
-            public void onCircleClick(Circle circle) {
-                showCircles();
-            }
-        });
+        map.setOnCircleClickListener(circle -> showCircles());
 
         // restore last position
         map.moveCamera(CameraUpdateFactory.newLatLngZoom(new LatLng(Double.longBitsToDouble(prefs.getLong(PREFS_SAVE_LAT, 0)),
@@ -308,9 +300,7 @@ public class BatteryRange extends FragmentActivity
     public void onLocationChanged(Location location) {
         currLocation = location;
         updateCircles();
-        if (status != STATUS_RUNNING) {
-            btConnect();
-        }
+        btConnect();
     }
 
     @Override
@@ -325,6 +315,8 @@ public class BatteryRange extends FragmentActivity
 
     @Override
     public void onProviderDisabled(String provider) {
+        // turn off Bluetooth connection when GPS turned off
+        status = STATUS_FINISHED;
         log("onProviderDisabled: " + provider);
     }
 
@@ -348,8 +340,7 @@ public class BatteryRange extends FragmentActivity
     @Override
     protected void onPause() {
         // disconnect from Bluetooth and stop connection retries
-        status = STATUS_STOP;
-        handler = null;
+        status = STATUS_FINISHED;
 
         // remove circles
         range = 0;
@@ -377,7 +368,6 @@ public class BatteryRange extends FragmentActivity
     @Override
     protected void onResume() {
         super.onResume();
-        handler = new Handler();
 
         // start talking to bike again
         btConnect();
@@ -407,13 +397,11 @@ public class BatteryRange extends FragmentActivity
 
     // handles Marshmallow permission dialog result
     @Override
-    public void onRequestPermissionsResult(int requestCode, String permissions[], int[] grantResults) {
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         locationPermissionGranted = false;
-        switch (requestCode) {
-            case PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION: {
-                if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    locationPermissionGranted = true;
-                }
+        if (requestCode == PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                locationPermissionGranted = true;
             }
         }
         updateLocationUI();
@@ -508,7 +496,7 @@ public class BatteryRange extends FragmentActivity
 
     // log exceptions so everyone sees them
     static void logExcept(Exception e) {
-        String msg = Log.getStackTraceString(e);
+        // String msg = Log.getStackTraceString(e);
         String fcn = e.getStackTrace()[0].getMethodName();
         Log.i(TAG, fcn, e);
         //loggerSet.info(fcn + " exception:" + msg);
@@ -591,7 +579,7 @@ public class BatteryRange extends FragmentActivity
         }
 
         if (devices.size() == 0) {
-            Toast.makeText(getApplicationContext(), "No paired motorcycles!", Toast.LENGTH_LONG).show();
+            Toast.makeText(getApplicationContext(), "No paired motorcycles", Toast.LENGTH_LONG).show();
             return;
         }
 
@@ -602,35 +590,29 @@ public class BatteryRange extends FragmentActivity
         // build list dialog
         final AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Select from paired Bluetooth devices");
-        builder.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
-            public void onClick(DialogInterface dialog, int id) {
-                dialog.cancel();
-            }
-        });
+        builder.setNegativeButton("Cancel", (dialog, id) -> dialog.cancel());
 
-        builder.setItems(devicesArray, new DialogInterface.OnClickListener() {
-            public void onClick(DialogInterface dialog, int which) {
-                btName = devicesArray[which].substring(0, devicesArray[which].indexOf(" ("));
+        builder.setItems(devicesArray, (dialog, which) -> {
+            btName = devicesArray[which].substring(0, devicesArray[which].indexOf(" ("));
 
-                // save picked device
-                SharedPreferences.Editor editor = prefs.edit();
-                editor.putString(PREFS_DEVICE, btName);
-                editor.apply();
+            // save picked device
+            SharedPreferences.Editor editor = prefs.edit();
+            editor.putString(PREFS_DEVICE, btName);
+            editor.apply();
 
-                // disconnect from current device
-                if (status == STATUS_RUNNING) {
-                    status = STATUS_STOP;
-                    while (status != STATUS_FINISHED) {
-                        try {
-                            Thread.sleep(250);
-                        } catch (InterruptedException e) {
-                        }
+            // disconnect from current device
+            if (status == STATUS_RUNNING) {
+                status = STATUS_STOP;
+                while (status != STATUS_FINISHED) {
+                    try {
+                        Thread.sleep(250);
+                    } catch (InterruptedException e) {
                     }
                 }
-
-                // connect to new device
-                btConnect();
             }
+
+            // connect to new device
+            btConnect();
         });
 
         builder.create();
@@ -659,69 +641,61 @@ public class BatteryRange extends FragmentActivity
         }
         final RadioGroup radioGroup = views.findViewById(R.id.radiobuttons);
 
-        builder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
-            public void onClick(DialogInterface dialog, int id) {
-                double lat;
-                double lng;
-                String snippet = "";
+        builder.setPositiveButton("OK", (dialog, id) -> {
+            double lat;
+            double lng;
+            String snippet = "";
 
-                // figure out if we're setting the home or destination marker
-                int flag = MARK_UNKNOWN;
-                if (radioGroup != null) {
-                    switch (radioGroup.getCheckedRadioButtonId()) {
-                        case R.id.home:
-                            flag = MARK_HOME;
-                            break;
-                        case R.id.dest:
-                            flag = MARK_DEST;
-                            break;
-                    }
+            // figure out if we're setting the home or destination marker
+            int flag = MARK_UNKNOWN;
+            if (radioGroup != null) {
+                int buttonId = radioGroup.getCheckedRadioButtonId();
+                if (buttonId == R.id.home) {
+                    flag = MARK_HOME;
+                } else if (buttonId == R.id.dest) {
+                    flag = MARK_DEST;
                 }
-                if (flag == MARK_UNKNOWN) {
-                    Toast.makeText(getApplicationContext(), "You must pick a marker", Toast.LENGTH_LONG).show();
+            }
+            if (flag == MARK_UNKNOWN) {
+                Toast.makeText(getApplicationContext(), "You must pick a marker", Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            // determine the position
+            if (latLng != null) {
+                lat = latLng.latitude;
+                lng = latLng.longitude;
+            } else {
+                String addressFinal = addressText.getText().toString().trim();
+                if (addressFinal.length() == 0) {
+                    Toast.makeText(getApplicationContext(), "You must enter an address", Toast.LENGTH_LONG).show();
                     return;
-                }
-
-                // determine the position
-                if (latLng != null) {
-                    lat = latLng.latitude;
-                    lng = latLng.longitude;
                 } else {
-                    String addressFinal = addressText.getText().toString().trim();
-                    if (addressFinal.length() == 0) {
-                        Toast.makeText(getApplicationContext(), "You must enter an address", Toast.LENGTH_LONG).show();
-                        return;
-                    } else {
-                        // convert street address to lat/long
-                        Geocoder coder = new Geocoder(getApplicationContext());
-                        try {
-                            List<Address> addresses = coder.getFromLocationName(addressFinal, 1);
-                            if (addresses.size() == 0) {
-                                Toast.makeText(getApplicationContext(), "Address not found", Toast.LENGTH_LONG).show();
-                                return;
-                            } else {
-                                lat = addresses.get(0).getLatitude();
-                                lng = addresses.get(0).getLongitude();
-                                snippet = addressFinal;
-                            }
-                        } catch (IOException e) {
-                            logExcept(e);
-                            Toast.makeText(getApplicationContext(), "Exception: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    // convert street address to lat/long
+                    Geocoder coder = new Geocoder(getApplicationContext());
+                    try {
+                        List<Address> addresses = coder.getFromLocationName(addressFinal, 1);
+                        if (addresses.size() == 0) {
+                            Toast.makeText(getApplicationContext(), "Address not found", Toast.LENGTH_LONG).show();
                             return;
+                        } else {
+                            lat = addresses.get(0).getLatitude();
+                            lng = addresses.get(0).getLongitude();
+                            snippet = addressFinal;
                         }
+                    } catch (IOException e) {
+                        logExcept(e);
+                        Toast.makeText(getApplicationContext(), "Exception: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                        return;
                     }
                 }
-
-                // finally actually set a marker
-                setMarker(flag, lat, lng, snippet);
             }
+
+            // finally actually set a marker
+            setMarker(flag, lat, lng, snippet);
         });
 
-        builder.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
-            public void onClick(DialogInterface dialog, int id) {
-                dialog.cancel();
-            }
-        });
+        builder.setNegativeButton("Cancel", (dialog, id) -> dialog.cancel());
 
         builder.create();
         builder.show();
@@ -786,6 +760,7 @@ public class BatteryRange extends FragmentActivity
     }
 
     // handle data from the bike and decode range information
+    // this class should always be running except when Bluetooth or the GPS is off, or the app is paused
     class BtRange extends AsyncTask<Void, String, Void> {
         @Override
         protected Void doInBackground(Void... params) {
@@ -794,13 +769,20 @@ public class BatteryRange extends FragmentActivity
             InputStream btInputStream = null;
             OutputStream btOutputStream = null;
 
-            status = STATUS_FINISHED;
-            if (handler == null || btName == null) {
+            if (status == STATUS_RUNNING) {
+                // we're already running
                 return null;
             }
+
+            status = STATUS_FINISHED;
             if (!btAdapter.isEnabled()) {
                 // Bluetooth not enabled
                 publishProgress("Bluetooth not enabled");
+                return null;
+            }
+
+            if (!locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                publishProgress("GPS is not enabled");
                 return null;
             }
 
@@ -824,90 +806,91 @@ public class BatteryRange extends FragmentActivity
                 return null;
             }
 
-            try {
-                // connect to bike
-                publishProgress("Connecting to bike");
-                btSocket = btDevice.createInsecureRfcommSocketToServiceRecord(uuid_spp);
-                if (!testing) {
-                    btSocket.connect();
-                }
-                publishProgress("Device connected");
-                btInputStream = btSocket.getInputStream();
-                btOutputStream = btSocket.getOutputStream();
-
-                status = STATUS_RUNNING;
-                while (status == STATUS_RUNNING) {
+            status = STATUS_RUNNING;
+            while (status == STATUS_RUNNING) {
+                try {
+                    // connect to bike
+                    publishProgress("Connecting to bike");
+                    btSocket = btDevice.createInsecureRfcommSocketToServiceRecord(uuid_spp);
                     if (!testing) {
-                        // write command packet
-                        btOutputStream.write(cmd);
+                        btSocket.connect();
+                    }
+                    publishProgress("Bike connected");
+                    btInputStream = btSocket.getInputStream();
+                    btOutputStream = btSocket.getOutputStream();
 
-                        // read response packet
-                        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-                        byte[] data = new byte[1024];
-                        byte[] packet = null;
-                        boolean complete = false;
-                        while (!complete) {
-                            // really should do a select(), but Java makes that impossible
-                            int ctr = btInputStream.read(data);
-                            if (ctr == -1) {
-                                break;
+                    while (status == STATUS_RUNNING) {
+                        if (!testing) {
+                            // write command packet
+                            btOutputStream.write(cmd);
+
+                            // read response packet
+                            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                            byte[] data = new byte[1024];
+                            byte[] packet = null;
+                            boolean complete = false;
+                            while (!complete) {
+                                // really should do a select(), but Java makes that impossible
+                                int ctr = btInputStream.read(data);
+                                if (ctr == -1) {
+                                    break;
+                                }
+                                buffer.write(data, 0, ctr);
+                                // did we get the trailer & checksum?
+                                packet = buffer.toByteArray();
+                                int i = find(packet, trailer);
+                                complete = (i > 0) && ((packet.length - i) == 8);
                             }
-                            buffer.write(data, 0, ctr);
-                            // did we get the trailer & checksum?
-                            packet = buffer.toByteArray();
-                            int i = find(packet, trailer);
-                            complete = (i > 0) && ((packet.length - i) == 8);
+
+                            // extract range in meters
+                            range = (packet[16] + 256 * packet[17]) * 10.0;
+                        } else {
+                            // fake range for testing GUI
+                            if (range < 0) {
+                                range = 80000;
+                            }
+                            range -= 2500;
                         }
-
-                        // extract range in meters
-                        range = (packet[16] + 256 * packet[17]) * 10.0;
-                    } else {
-                        // fake range for testing GUI
-                        if (range < 0) {
-                            range = 80000;
+                        log("RANGE: " + range);
+                        if (range != oldRange) {
+                            oldRange = range;
+                            publishProgress();
                         }
-                        range -= 2500;
+                        Thread.sleep(5 * 1000);
                     }
-                    log("RANGE: " + range);
-                    if (range != oldRange) {
-                        oldRange = range;
-                        publishProgress();
+                } catch (Exception e) {
+                    // if anything goes wrong, remove the range circles
+                    range = 0;
+                    updateCircles();
+                    String msg = e.getMessage();
+                    if (!msg.contains("read ret: -1")) {
+                        publishProgress("BtRange: " + msg);
                     }
-                    Thread.sleep(5 * 1000);
+                    logExcept(e);
                 }
-            } catch (Exception e) {
-                // if anything goes wrong, remove the range circles
-                range = 0;
-                updateCircles();
-                String msg = e.getMessage();
-                if (!msg.contains("read ret: -1") ) {
-                    publishProgress("BtRange: " + e.getMessage());
-                }
-                logExcept(e);
-            }
 
-            try {
-                if (btOutputStream != null) {
-                    btOutputStream.close();
+                try {
+                    if (btOutputStream != null) {
+                        btOutputStream.close();
+                    }
+                } catch (IOException e) {
+                    publishProgress("btOutputStream.close(): " + e.getMessage());
                 }
-            } catch (IOException e) {
-                publishProgress("btOutputStream.close(): " + e.getMessage());
-            }
-            try {
-                if (btInputStream != null) {
-                    btInputStream.close();
+                try {
+                    if (btInputStream != null) {
+                        btInputStream.close();
+                    }
+                } catch (IOException e) {
+                    publishProgress("btInputStream.close: " + e.getMessage());
                 }
-            } catch (IOException e) {
-                publishProgress("btInputStream.close: " + e.getMessage());
-            }
-            try {
-                if (btSocket != null) {
-                    btSocket.close();
+                try {
+                    if (btSocket != null) {
+                        btSocket.close();
+                    }
+                } catch (IOException e) {
+                    publishProgress("btSocket.close: " + e.getMessage());
                 }
-            } catch (IOException e) {
-                publishProgress("btSocket.close: " + e.getMessage());
             }
-
             status = STATUS_FINISHED;
             return null;
         }
